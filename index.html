@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>馬拉松人流調度時空圖（含地圖與GPX解析）</title>
+    <!-- 載入 Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 載入 Leaflet 地圖 CSS 和 JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    
+    <!-- 設定 Tailwind 配置和 Inter 字體 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'Noto Sans TC', 'sans-serif'],
+                    },
+                    colors: {
+                        // 自訂顏色選項
+                        'c-red': '#ef4444',
+                        'c-orange': '#f97316',
+                        'c-amber': '#f59e0b',
+                        'c-yellow': '#eab308',
+                        'c-lime': '#84cc16',
+                        'c-green': '#10b981',
+                        'c-teal': '#14b8a6',
+                        'c-cyan': '#06b6d4',
+                        'c-sky': '#0ea5e9',
+                        'c-blue': '#3b82f6',
+                        'c-indigo': '#6366f1',
+                        'c-violet': '#8b5cf6',
+                        'c-purple': '#a855f7',
+                        'c-fuchsia': '#d946ef',
+                        'c-pink': '#ec4899',
+                        'c-rose': '#f43f5e',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            background-color: #f3f4f6;
+        }
+        #chart-container {
+            width: 100%;
+            overflow-x: auto;
+        }
+        canvas {
+            background-color: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+        #map {
+            height: 450px; /* 稍微加高地圖 */
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+            z-index: 1; 
+        }
+        /* 滑桿樣式優化 */
+        input[type=range] {
+            -webkit-appearance: none; 
+            background: transparent; 
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 20px;
+            width: 20px;
+            border-radius: 50%;
+            background: currentColor;
+            cursor: pointer;
+            margin-top: -8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            border: 2px solid white;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: #e5e7eb;
+            border-radius: 3px;
+        }
+        
+        input::-webkit-outer-spin-button,
+        input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type=number] {
+            -moz-appearance: textfield;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <h1 class="text-3xl font-bold text-gray-800 mb-6 border-b pb-2">🏃‍♂️ 馬拉松人流調度模擬：時空圖</h1>
+    <p class="text-gray-600 mb-6">上傳 GPX 檔案、設定顏色與參數，系統將自動分析路徑重疊與衝突點。</p>
+
+    <div class="flex flex-col lg:flex-row gap-6">
+
+        <!-- 左側：參數設定區 -->
+        <div class="lg:w-1/3 bg-white p-6 rounded-xl shadow-lg h-full overflow-y-auto max-h-screen">
+            <h2 class="text-xl font-semibold text-gray-700 mb-4">參數設定與 GPX 匯入</h2>
+            <div id="controls" class="space-y-6">
+                
+                <!-- 21K 半馬組 -->
+                <div id="group-21k" class="bg-gray-50 p-4 rounded-lg border border-gray-200 shadow-sm relative overflow-hidden group-card">
+                    <div class="absolute top-0 left-0 w-1.5 h-full bg-blue-500 group-indicator" id="21k-indicator"></div>
+                    <div class="flex justify-between items-center mb-3 pl-2">
+                        <h3 class="text-lg font-bold text-gray-800">半馬組 (21K)</h3>
+                        <!-- 顏色選擇器 -->
+                        <select id="21k-color" class="text-xs border border-gray-300 rounded p-1" onchange="updateGroupColor('21k')">
+                            <option value="#3b82f6" selected>藍色</option>
+                            <option value="#ef4444">紅色</option>
+                            <option value="#f97316">橘色</option>
+                            <option value="#eab308">黃色</option>
+                            <option value="#10b981">綠色</option>
+                            <option value="#06b6d4">青色</option>
+                            <option value="#6366f1">靛色</option>
+                            <option value="#8b5cf6">紫色</option>
+                            <option value="#ec4899">粉色</option>
+                            <option value="#1f2937">黑色</option>
+                        </select>
+                    </div>
+                    
+                    <div class="space-y-3 pl-2">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">GPX 檔案</label>
+                            <input type="file" id="21k-file" accept=".gpx" class="w-full text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 mt-1" onchange="handleFileUpload(event, '21k')">
+                            <p id="21k-dist-display" class="text-xs text-gray-500 mt-1 text-right">-- km</p>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">出發時間 (時:分)</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="number" id="21k-start-h" value="6" min="0" max="23" class="w-12 p-1 text-center border rounded text-sm" placeholder="HH">
+                                <span>:</span>
+                                <input type="number" id="21k-start-m" value="00" min="0" max="59" class="w-12 p-1 text-center border rounded text-sm" placeholder="MM">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500">最快 (min/km)</label>
+                                <input type="number" id="21k-pace-fast" value="4.5" step="0.1" class="w-full p-1 border rounded text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500">最慢 (min/km)</label>
+                                <input type="number" id="21k-pace-slow" value="6.5" step="0.1" class="w-full p-1 border rounded text-sm">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500">人數 / 賽道均寬(m)</label>
+                            <div class="flex gap-2">
+                                <input type="number" id="21k-participants" value="10000" class="w-full p-1 border rounded text-sm" placeholder="人數">
+                                <input type="number" id="21k-avg-width" value="10" class="w-20 p-1 border rounded text-sm" placeholder="寬度">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 10K 組 -->
+                <div id="group-10k" class="bg-gray-50 p-4 rounded-lg border border-gray-200 shadow-sm relative overflow-hidden group-card">
+                    <div class="absolute top-0 left-0 w-1.5 h-full bg-green-500 group-indicator" id="10k-indicator"></div>
+                    <div class="flex justify-between items-center mb-3 pl-2">
+                        <h3 class="text-lg font-bold text-gray-800">10K 組</h3>
+                        <select id="10k-color" class="text-xs border border-gray-300 rounded p-1" onchange="updateGroupColor('10k')">
+                            <option value="#3b82f6">藍色</option>
+                            <option value="#ef4444">紅色</option>
+                            <option value="#f97316">橘色</option>
+                            <option value="#eab308">黃色</option>
+                            <option value="#10b981" selected>綠色</option>
+                            <option value="#06b6d4">青色</option>
+                            <option value="#6366f1">靛色</option>
+                            <option value="#8b5cf6">紫色</option>
+                            <option value="#ec4899">粉色</option>
+                            <option value="#1f2937">黑色</option>
+                        </select>
+                    </div>
+                    
+                    <div class="space-y-3 pl-2">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">GPX 檔案</label>
+                            <input type="file" id="10k-file" accept=".gpx" class="w-full text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100 mt-1" onchange="handleFileUpload(event, '10k')">
+                            <p id="10k-dist-display" class="text-xs text-gray-500 mt-1 text-right">-- km</p>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">出發時間 (時:分)</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="number" id="10k-start-h" value="6" min="0" max="23" class="w-12 p-1 text-center border rounded text-sm">
+                                <span>:</span>
+                                <input type="number" id="10k-start-m" value="15" min="0" max="59" class="w-12 p-1 text-center border rounded text-sm">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500">最快 (min/km)</label>
+                                <input type="number" id="10k-pace-fast" value="6.0" step="0.1" class="w-full p-1 border rounded text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500">最慢 (min/km)</label>
+                                <input type="number" id="10k-pace-slow" value="8.0" step="0.1" class="w-full p-1 border rounded text-sm">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500">人數 / 賽道均寬(m)</label>
+                            <div class="flex gap-2">
+                                <input type="number" id="10k-participants" value="5000" class="w-full p-1 border rounded text-sm">
+                                <input type="number" id="10k-avg-width" value="8" class="w-20 p-1 border rounded text-sm">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 5K 迷你馬組 -->
+                <div id="group-5k" class="bg-gray-50 p-4 rounded-lg border border-gray-200 shadow-sm relative overflow-hidden group-card">
+                    <div class="absolute top-0 left-0 w-1.5 h-full bg-orange-500 group-indicator" id="5k-indicator"></div>
+                    <div class="flex justify-between items-center mb-3 pl-2">
+                        <h3 class="text-lg font-bold text-gray-800">迷你馬組 (5K)</h3>
+                        <select id="5k-color" class="text-xs border border-gray-300 rounded p-1" onchange="updateGroupColor('5k')">
+                            <option value="#3b82f6">藍色</option>
+                            <option value="#ef4444">紅色</option>
+                            <option value="#f97316" selected>橘色</option>
+                            <option value="#eab308">黃色</option>
+                            <option value="#10b981">綠色</option>
+                            <option value="#06b6d4">青色</option>
+                            <option value="#6366f1">靛色</option>
+                            <option value="#8b5cf6">紫色</option>
+                            <option value="#ec4899">粉色</option>
+                            <option value="#1f2937">黑色</option>
+                        </select>
+                    </div>
+                    
+                    <div class="space-y-3 pl-2">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">GPX 檔案</label>
+                            <input type="file" id="5k-file" accept=".gpx" class="w-full text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100 mt-1" onchange="handleFileUpload(event, '5k')">
+                            <p id="5k-dist-display" class="text-xs text-gray-500 mt-1 text-right">-- km</p>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">出發時間 (時:分)</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="number" id="5k-start-h" value="6" min="0" max="23" class="w-12 p-1 text-center border rounded text-sm">
+                                <span>:</span>
+                                <input type="number" id="5k-start-m" value="30" min="0" max="59" class="w-12 p-1 text-center border rounded text-sm">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500">最快 (min/km)</label>
+                                <input type="number" id="5k-pace-fast" value="7.5" step="0.1" class="w-full p-1 border rounded text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500">最慢 (min/km)</label>
+                                <input type="number" id="5k-pace-slow" value="10.0" step="0.1" class="w-full p-1 border rounded text-sm">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500">人數 / 賽道均寬(m)</label>
+                            <div class="flex gap-2">
+                                <input type="number" id="5k-participants" value="3000" class="w-full p-1 border rounded text-sm">
+                                <input type="number" id="5k-avg-width" value="6" class="w-20 p-1 border rounded text-sm">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 衝突檢測說明 -->
+                <div class="p-3 bg-indigo-50 rounded text-xs text-indigo-800 border border-indigo-100">
+                    <p class="font-bold">ℹ️ 自動衝突分析</p>
+                    <p>點擊「開始分析」後，程式將自動比對各組 GPX 路徑的空間重疊，並結合時間判斷是否發生衝突。</p>
+                </div>
+                
+                <button id="analyze-button" onclick="analyzeAndDraw()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl transition duration-300 ease-in-out shadow-md hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50">
+                    開始分析並偵測衝突
+                </button>
+            </div>
+        </div>
+
+        <!-- 右側：地圖與圖表顯示區 -->
+        <div class="lg:w-2/3 flex flex-col gap-4">
+            <!-- 地圖區域 -->
+            <div class="relative">
+                <div id="map" class="shadow-lg border border-gray-200"></div>
+                <!-- 載入指示 -->
+                <div id="map-loading" class="absolute inset-0 bg-white/80 z-10 hidden flex-col items-center justify-center text-gray-500">
+                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-2"></div>
+                    <p class="text-sm">處理中...</p>
+                </div>
+            </div>
+
+            <!-- 各組路徑預覽控制 (Sliders) -->
+            <div id="playback-controls" class="bg-white p-4 rounded-xl shadow border border-gray-200">
+                <h3 class="text-sm font-bold text-gray-700 mb-3 border-b pb-2">🗺️ 地圖預覽控制：拖動拉桿檢視各組位置</h3>
+                <div id="sliders-container" class="space-y-4">
+                    <p class="text-gray-400 text-sm italic text-center py-2">請先上傳 GPX 檔案以啟用預覽控制。</p>
+                </div>
+            </div>
+
+            <!-- 時空圖區域 -->
+            <div id="chart-container" class="rounded-xl shadow-lg relative bg-white border border-gray-200 p-2">
+                <canvas id="flowChart" width="800" height="500" class="w-full"></canvas>
+            </div>
+            
+            <!-- 衝突結果區 -->
+            <div class="p-4 bg-yellow-50 text-yellow-800 rounded-lg shadow border border-yellow-200">
+                <h3 class="font-semibold mb-2 flex items-center">
+                    <span class="mr-2">🚦</span> 自動判斷結果與衝突分析:
+                </h3>
+                <div id="conflict-message" class="text-sm space-y-2">
+                    請點擊「開始分析」按鈕，系統將自動計算路徑空間交集與時間重疊。
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- 全局變數與常量 ---
+        
+        let GROUPS = [
+            { id: '21k', name: '半馬組 (21K)', color: '#3b82f6', defaultColor: '#3b82f6' },
+            { id: '10k', name: '10K 組', color: '#10b981', defaultColor: '#10b981' },
+            { id: '5k', name: '迷你馬組 (5K)', color: '#f97316', defaultColor: '#f97316' },
+        ];
+        
+        // 狀態：儲存解析後的 GPX 數據
+        // coords: [[lat, lon], ...], dists: [0, 0.05, ...] (累積距離 km)
+        const gpxDataMap = {}; 
+        let MAX_CHART_DIST = 21.1; 
+
+        // 圖表常量
+        const PADDING_LEFT = 70; 
+        const PADDING_BOTTOM = 30;
+        const PADDING_TOP = 20;
+        const PADDING_RIGHT = 10;
+        const R_THROUGHPUT = 100; // 人流吞吐率
+
+        let map; // Leaflet 地圖實例
+        let WIDTH, HEIGHT, X_SCALE, Y_SCALE;
+        let MIN_TIME_MINUTES = 0;
+        let MAX_TIME_MINUTES = 0;
+        
+        // 地圖上的標記 (Markers)
+        const groupMarkers = {};
+
+        const canvas = document.getElementById('flowChart');
+        const ctx = canvas.getContext('2d');
+
+        // --- 核心工具函數 ---
+
+        function formatTime(totalMinutes) {
+            let h = Math.floor(totalMinutes / 60);
+            let m = Math.floor(totalMinutes % 60);
+            if (h >= 24) h = h % 24;
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+        }
+
+        // 計算兩點間距離 (km)
+        function getDistKm(pt1, pt2) {
+            const R = 6371; // 地球半徑
+            const dLat = (pt2[0] - pt1[0]) * Math.PI / 180;
+            const dLon = (pt2[1] - pt1[1]) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(pt1[0] * Math.PI / 180) * Math.cos(pt2[0] * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2); 
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+            return R * c;
+        }
+
+        function calculateCumulativeDistances(coords) {
+            const dists = [0];
+            let total = 0;
+            for (let i = 1; i < coords.length; i++) {
+                const d = getDistKm(coords[i-1], coords[i]);
+                total += d;
+                dists.push(total);
+            }
+            return { dists, total };
+        }
+
+        function parseGPX(gpxText) {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(gpxText, "text/xml");
+            if (xmlDoc.querySelector('parsererror')) throw new Error("GPX 解析錯誤");
+            
+            const trkpts = xmlDoc.getElementsByTagName("trkpt");
+            const coords = [];
+            for (let i = 0; i < trkpts.length; i++) {
+                const lat = parseFloat(trkpts[i].getAttribute("lat"));
+                const lon = parseFloat(trkpts[i].getAttribute("lon"));
+                if (!isNaN(lat) && !isNaN(lon)) coords.push([lat, lon]);
+            }
+            if (coords.length === 0) throw new Error("無效的路徑點");
+            
+            // 進行下採樣 (Downsampling) 以提升效能，保留足夠精度即可
+            // 這裡簡單每隔 5 點取一點，或確保點距大於 10m
+            const sampledCoords = [coords[0]];
+            for(let i=1; i<coords.length; i++) {
+                if (getDistKm(sampledCoords[sampledCoords.length-1], coords[i]) > 0.02) { // 每 20m 採樣
+                    sampledCoords.push(coords[i]);
+                }
+            }
+            
+            const { dists, total } = calculateCumulativeDistances(sampledCoords);
+            return { coords: sampledCoords, dists, distance: total };
+        }
+
+        // --- UI 互動邏輯 ---
+
+        // 更新組別顏色
+        function updateGroupColor(groupId) {
+            const select = document.getElementById(`${groupId}-color`);
+            const color = select.value;
+            
+            // 更新數據模型
+            const group = GROUPS.find(g => g.id === groupId);
+            if (group) group.color = color;
+
+            // 更新左側指示條
+            document.getElementById(`${groupId}-indicator`).style.backgroundColor = color;
+            
+            // 更新滑桿顏色
+            const slider = document.getElementById(`slider-${groupId}`);
+            if (slider) slider.style.color = color;
+
+            // 更新地圖路徑
+            if (gpxDataMap[groupId] && gpxDataMap[groupId].layer) {
+                gpxDataMap[groupId].layer.setStyle({ color: color });
+            }
+            
+            // 更新 Marker 顏色 (重新建立)
+            if (gpxDataMap[groupId]) {
+                updateMarkerPosition(groupId, document.getElementById(`slider-${groupId}`)?.value || 0);
+            }
+
+            // 如果已經有分析圖表，提示重新分析
+            if (X_SCALE) analyzeAndDraw(); 
+        }
+
+        // --- 地圖處理 ---
+
+        function initMap() {
+            if (map) map.remove(); 
+            map = L.map('map').setView([25.03, 121.56], 13); 
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+        }
+
+        function drawPath(groupId) {
+            const data = gpxDataMap[groupId];
+            if (!data) return;
+            if (data.layer) map.removeLayer(data.layer);
+            
+            const groupConfig = GROUPS.find(g => g.id === groupId);
+            
+            const polyline = L.polyline(data.coords, {
+                color: groupConfig.color,
+                weight: 5,
+                opacity: 0.8,
+            }).addTo(map);
+
+            data.layer = polyline; 
+            map.fitBounds(polyline.getBounds());
+            
+            // 初始化/更新 Slider UI
+            renderSliders();
+            // 初始化 Marker
+            createMarker(groupId);
+        }
+
+        // 建立地圖上的圓點標記
+        function createMarker(groupId) {
+            if (groupMarkers[groupId]) map.removeLayer(groupMarkers[groupId]);
+            
+            const data = gpxDataMap[groupId];
+            const startPt = data.coords[0];
+            const group = GROUPS.find(g => g.id === groupId);
+
+            const marker = L.circleMarker(startPt, {
+                radius: 8,
+                fillColor: group.color,
+                color: "#fff",
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 1
+            }).addTo(map);
+            
+            groupMarkers[groupId] = marker;
+            
+            // 綁定 Popup 顯示資訊
+            marker.bindPopup(`<b>${group.name}</b><br>起點`);
+        }
+
+        // 更新標記位置 (根據 Slider 百分比)
+        function updateMarkerPosition(groupId, percent) {
+            const data = gpxDataMap[groupId];
+            if (!data || !groupMarkers[groupId]) return;
+
+            const group = GROUPS.find(g => g.id === groupId);
+            const marker = groupMarkers[groupId];
+            
+            // 找出對應距離的座標索引
+            const targetDist = data.distance * (percent / 100);
+            
+            // 簡單搜尋 (可優化為二分搜)
+            let idx = 0;
+            for (let i = 0; i < data.dists.length; i++) {
+                if (data.dists[i] >= targetDist) {
+                    idx = i;
+                    break;
+                }
+            }
+            
+            const newLatLng = data.coords[idx];
+            marker.setLatLng(newLatLng);
+            marker.setStyle({ fillColor: group.color }); // 確保顏色同步
+
+            // 計算當前預估時間 (基於最快與最慢配速的平均)
+            // 獲取參數
+            const startH = parseInt(document.getElementById(`${groupId}-start-h`).value) || 0;
+            const startM = parseInt(document.getElementById(`${groupId}-start-m`).value) || 0;
+            const startTime = startH * 60 + startM;
+            
+            const paceFast = parseFloat(document.getElementById(`${groupId}-pace-fast`).value);
+            const paceSlow = parseFloat(document.getElementById(`${groupId}-pace-slow`).value);
+            const avgPace = (paceFast + paceSlow) / 2;
+            
+            const currentTime = startTime + targetDist * avgPace;
+            const timeStr = formatTime(currentTime);
+
+            marker.setPopupContent(`
+                <div class="text-center">
+                    <b style="color:${group.color}">${group.name}</b><br>
+                    距離: ${targetDist.toFixed(1)} km<br>
+                    預估領先群時間: ${timeStr}
+                </div>
+            `).openPopup();
+        }
+
+        // 渲染滑桿區域
+        function renderSliders() {
+            const container = document.getElementById('sliders-container');
+            const activeGroups = GROUPS.filter(g => gpxDataMap[g.id]);
+            
+            if (activeGroups.length === 0) {
+                container.innerHTML = '<p class="text-gray-400 text-sm italic text-center py-2">請先上傳 GPX 檔案以啟用預覽控制。</p>';
+                return;
+            }
+
+            container.innerHTML = '';
+            activeGroups.forEach(group => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center space-x-4 bg-gray-50 p-2 rounded-lg';
+                div.innerHTML = `
+                    <div class="w-24 flex-shrink-0">
+                        <span class="text-xs font-bold px-2 py-1 rounded text-white" style="background-color: ${group.color}">${group.name}</span>
+                    </div>
+                    <div class="flex-grow flex flex-col">
+                        <input type="range" id="slider-${group.id}" min="0" max="100" value="0" step="1" 
+                            class="w-full h-2 rounded-lg appearance-none cursor-pointer"
+                            style="color: ${group.color}"
+                            oninput="updateMarkerPosition('${group.id}', this.value)">
+                        <div class="flex justify-between text-xs text-gray-500 mt-1">
+                            <span>起點</span>
+                            <span>終點</span>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        async function handleFileUpload(event, groupId) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            document.getElementById('map-loading').style.display = 'flex';
+
+            try {
+                const text = await file.text();
+                const result = parseGPX(text);
+                
+                gpxDataMap[groupId] = {
+                    coords: result.coords,
+                    dists: result.dists,
+                    distance: result.distance,
+                    layer: null
+                };
+
+                document.getElementById(`${groupId}-dist-display`).textContent = `${result.distance.toFixed(2)} km`;
+                drawPath(groupId);
+                
+            } catch (err) {
+                alert(`解析失敗: ${err.message}`);
+                console.error(err);
+            } finally {
+                document.getElementById('map-loading').style.display = 'none';
+            }
+        }
+
+        // --- 分析邏輯 (含自動衝突偵測) ---
+
+        function getParams() {
+            const params = { groups: {} };
+            
+            GROUPS.forEach(group => {
+                const participants = parseFloat(document.getElementById(`${group.id}-participants`).value) || 0;
+                const avgWidth = parseFloat(document.getElementById(`${group.id}-avg-width`).value) || 1;
+                const paceFast = parseFloat(document.getElementById(`${group.id}-pace-fast`).value);
+                const paceSlow = parseFloat(document.getElementById(`${group.id}-pace-slow`).value);
+                
+                const startH = parseInt(document.getElementById(`${group.id}-start-h`).value) || 0;
+                const startM = parseInt(document.getElementById(`${group.id}-start-m`).value) || 0;
+                const startTotalMinutes = startH * 60 + startM;
+
+                let flowTime = 0;
+                if (avgWidth > 0) flowTime = participants / (avgWidth * R_THROUGHPUT);
+                const flow = Math.max(flowTime, 0.1); 
+
+                let distance = 0;
+                if (gpxDataMap[group.id]) {
+                    distance = gpxDataMap[group.id].distance;
+                } else {
+                    distance = group.id === '21k' ? 21.1 : (group.id === '10k' ? 10 : 5);
+                }
+
+                params.groups[group.id] = {
+                    start: startTotalMinutes,
+                    paceFast, paceSlow, flow, distance,
+                    color: group.color,
+                    name: group.name,
+                    id: group.id
+                };
+            });
+            return params;
+        }
+
+        // 自動衝突偵測核心邏輯
+        function autoDetectConflicts(params) {
+            const conflicts = [];
+            const groupIds = Object.keys(params.groups).filter(id => gpxDataMap[id]);
+            
+            // 如果只有一組或沒有 GPX，無法進行空間比對
+            if (groupIds.length < 2) return [];
+
+            // 雙迴圈比對各組
+            for (let i = 0; i < groupIds.length; i++) {
+                for (let j = i + 1; j < groupIds.length; j++) {
+                    const g1 = groupIds[i];
+                    const g2 = groupIds[j];
+                    const data1 = gpxDataMap[g1];
+                    const data2 = gpxDataMap[g2];
+                    const param1 = params.groups[g1];
+                    const param2 = params.groups[g2];
+
+                    // 空間採樣比對 (找出重疊路段)
+                    // 遍歷 g1 的每個點，看是否靠近 g2 的任何點
+                    // 為了效能，每 5 點採樣一次
+                    const STEP = 5;
+                    const PROXIMITY_THRESHOLD_KM = 0.02; // 20公尺內視為同一路徑
+
+                    for (let k = 0; k < data1.coords.length; k += STEP) {
+                        const pt1 = data1.coords[k];
+                        const dist1 = data1.dists[k]; // g1 在此點的里程
+
+                        // 在 g2 中尋找最近點 (簡單遍歷，可優化)
+                        // 假設路徑大致順向，可縮小搜索範圍，這裡先暴力搜
+                        let minDist = Infinity;
+                        let closestK2 = -1;
+
+                        for (let m = 0; m < data2.coords.length; m += STEP) {
+                            const d = getDistKm(pt1, data2.coords[m]);
+                            if (d < minDist) {
+                                minDist = d;
+                                closestK2 = m;
+                            }
+                        }
+
+                        if (minDist < PROXIMITY_THRESHOLD_KM) {
+                            // 發現空間重疊點
+                            const dist2 = data2.dists[closestK2]; // g2 在此點的里程
+
+                            // 計算時間視窗
+                            // G1 Window: [Start + d1*Fast, Start + Flow + d1*Slow]
+                            const t1_start = param1.start + dist1 * param1.paceFast;
+                            const t1_end = param1.start + param1.flow + dist1 * param1.paceSlow;
+
+                            // G2 Window
+                            const t2_start = param2.start + dist2 * param2.paceFast;
+                            const t2_end = param2.start + param2.flow + dist2 * param2.paceSlow;
+
+                            // 檢查時間重疊
+                            const overlapStart = Math.max(t1_start, t2_start);
+                            const overlapEnd = Math.min(t1_end, t2_end);
+
+                            if (overlapStart < overlapEnd) {
+                                // 發生衝突
+                                // 為了避免重複紀錄相鄰點，檢查最後一個衝突點是否很近
+                                const lastConflict = conflicts[conflicts.length - 1];
+                                if (!lastConflict || 
+                                    lastConflict.g1 !== g1 || 
+                                    lastConflict.g2 !== g2 || 
+                                    Math.abs(lastConflict.d1 - dist1) > 0.5 // 距離超過 0.5km 才算新衝突段
+                                   ) {
+                                    conflicts.push({
+                                        g1, g2,
+                                        d1: dist1, // 用 G1 的里程做標示
+                                        tStart: overlapStart,
+                                        tEnd: overlapEnd,
+                                        name1: param1.name,
+                                        name2: param2.name
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return conflicts;
+        }
+
+        function analyzeAndDraw() {
+            WIDTH = canvas.width;
+            HEIGHT = canvas.height;
+            const params = getParams();
+
+            // 1. 計算邊界
+            let maxDist = 0;
+            let minTime = Infinity;
+            let maxTime = 0;
+
+            Object.values(params.groups).forEach(g => {
+                if (g.distance > maxDist) maxDist = g.distance;
+                if (g.start < minTime) minTime = g.start;
+                const endTime = g.start + g.flow + (g.distance * g.paceSlow);
+                if (endTime > maxTime) maxTime = endTime;
+            });
+
+            MAX_CHART_DIST = Math.max(maxDist, 5);
+            MIN_TIME_MINUTES = Math.floor(minTime / 30) * 30;
+            MAX_TIME_MINUTES = Math.ceil(maxTime / 30) * 30;
+            if (MAX_TIME_MINUTES - MIN_TIME_MINUTES < 60) MAX_TIME_MINUTES = MIN_TIME_MINUTES + 60;
+
+            const timeRange = MAX_TIME_MINUTES - MIN_TIME_MINUTES;
+            X_SCALE = (WIDTH - PADDING_LEFT - PADDING_RIGHT) / MAX_CHART_DIST;
+            Y_SCALE = (HEIGHT - PADDING_TOP - PADDING_BOTTOM) / timeRange;
+
+            // 2. 自動偵測衝突
+            const detectedConflicts = autoDetectConflicts(params);
+
+            // 3. 繪圖
+            ctx.clearRect(0, 0, WIDTH, HEIGHT);
+            drawAxes(detectedConflicts); // 將衝突點傳入以繪製輔助線
+
+            GROUPS.forEach(group => {
+                drawTrapezoid(params.groups[group.id]);
+            });
+
+            // 4. 更新衝突報告
+            updateConflictReport(detectedConflicts);
+        }
+
+        function toCanvasX(dist) { return PADDING_LEFT + dist * X_SCALE; }
+        function toCanvasY(timeMinutes) { return HEIGHT - PADDING_BOTTOM - (timeMinutes - MIN_TIME_MINUTES) * Y_SCALE; }
+
+        function drawTrapezoid(data) {
+            const { start, paceFast, paceSlow, flow, distance, color, name } = data;
+            
+            const p1 = { d: 0, t: start };
+            const p2 = { d: distance, t: start + distance * paceFast };
+            const p3 = { d: distance, t: start + flow + distance * paceSlow };
+            const p4 = { d: 0, t: start + flow };
+
+            const path = [
+                { x: toCanvasX(p1.d), y: toCanvasY(p1.t) },
+                { x: toCanvasX(p2.d), y: toCanvasY(p2.t) },
+                { x: toCanvasX(p3.d), y: toCanvasY(p3.t) },
+                { x: toCanvasX(p4.d), y: toCanvasY(p4.t) }
+            ];
+
+            ctx.beginPath();
+            ctx.moveTo(path[0].x, path[0].y);
+            ctx.lineTo(path[1].x, path[1].y);
+            ctx.lineTo(path[2].x, path[2].y);
+            ctx.lineTo(path[3].x, path[3].y);
+            ctx.closePath();
+
+            ctx.fillStyle = color + '66'; // 40% opacity
+            ctx.fill();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.fillStyle = '#374151';
+            ctx.font = 'bold 12px Inter';
+            ctx.fillText(name, path[0].x + 5, path[0].y - 5);
+        }
+
+        function drawAxes(conflicts) {
+            const AXIS_COLOR = '#4b5563';
+            const GRID_COLOR = '#e5e7eb';
+
+            // X 軸
+            ctx.beginPath();
+            ctx.moveTo(PADDING_LEFT, HEIGHT - PADDING_BOTTOM);
+            ctx.lineTo(WIDTH - PADDING_RIGHT, HEIGHT - PADDING_BOTTOM);
+            ctx.strokeStyle = AXIS_COLOR;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Y 軸
+            ctx.beginPath();
+            ctx.moveTo(PADDING_LEFT, HEIGHT - PADDING_BOTTOM);
+            ctx.lineTo(PADDING_LEFT, PADDING_TOP);
+            ctx.stroke();
+
+            // X 軸刻度
+            for (let d = 0; d <= Math.ceil(MAX_CHART_DIST); d += 2.5) {
+                const x = toCanvasX(d);
+                if (x > WIDTH) break;
+                ctx.beginPath(); ctx.moveTo(x, HEIGHT - PADDING_BOTTOM); ctx.lineTo(x, PADDING_TOP);
+                ctx.strokeStyle = GRID_COLOR; ctx.stroke();
+                ctx.fillStyle = AXIS_COLOR; ctx.textAlign = 'center';
+                ctx.fillText(d.toString(), x, HEIGHT - PADDING_BOTTOM + 15);
+            }
+            ctx.fillText("距離 (km)", WIDTH / 2, HEIGHT - 5);
+
+            // Y 軸刻度
+            for (let t = MIN_TIME_MINUTES; t <= MAX_TIME_MINUTES; t += 30) {
+                const y = toCanvasY(t);
+                ctx.beginPath(); ctx.moveTo(PADDING_LEFT, y); ctx.lineTo(WIDTH - PADDING_RIGHT, y);
+                ctx.strokeStyle = GRID_COLOR; ctx.stroke();
+                ctx.fillStyle = AXIS_COLOR; ctx.textAlign = 'right';
+                ctx.fillText(formatTime(t), PADDING_LEFT - 5, y + 5);
+            }
+            ctx.save(); ctx.translate(15, HEIGHT / 2); ctx.rotate(-Math.PI / 2);
+            ctx.textAlign = 'center'; ctx.fillText("時間", 0, 0); ctx.restore();
+
+            // 繪製自動偵測的衝突線
+            conflicts.forEach((c, idx) => {
+                const x = toCanvasX(c.d1);
+                const yTop = toCanvasY(c.tStart);
+                const yBottom = toCanvasY(c.tEnd);
+
+                // 紅色虛線
+                ctx.setLineDash([5, 5]);
+                ctx.strokeStyle = '#ef4444';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(x, HEIGHT - PADDING_BOTTOM);
+                ctx.lineTo(x, PADDING_TOP);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // 衝突區塊高亮
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.3)';
+                ctx.fillRect(x - 10, yBottom, 20, yTop - yBottom);
+
+                // 標籤
+                ctx.fillStyle = '#b91c1c';
+                ctx.textAlign = 'center';
+                ctx.font = 'bold 11px Inter';
+                ctx.fillText(`!衝突 ${idx + 1}`, x, PADDING_TOP + 10 + (idx % 2) * 15);
+            });
+        }
+
+        function updateConflictReport(conflicts) {
+            const msgDiv = document.getElementById('conflict-message');
+            if (conflicts.length === 0) {
+                msgDiv.innerHTML = '<p class="text-green-600 font-bold flex items-center"><span class="mr-1">✅</span> 分析完成：所有路徑在時空上未發現明顯重疊。</p>';
+                return;
+            }
+
+            let html = '<p class="text-red-600 font-bold mb-2">⚠️ 偵測到以下潛在衝突點：</p><ul class="space-y-2">';
+            conflicts.forEach((c, i) => {
+                html += `
+                    <li class="bg-white p-2 rounded border border-red-200 text-xs">
+                        <span class="font-bold text-red-700">衝突 ${i+1} (@ ${c.d1.toFixed(1)} km)</span><br>
+                        <span class="text-gray-700">${c.name1} ⚔️ ${c.name2}</span><br>
+                        <span class="text-gray-500">重疊時段: ${formatTime(c.tStart)} - ${formatTime(c.tEnd)}</span>
+                    </li>
+                `;
+            });
+            html += '</ul>';
+            msgDiv.innerHTML = html;
+        }
+
+        window.addEventListener('load', () => {
+            initMap();
+            renderSliders();
+            const container = document.getElementById('chart-container');
+            canvas.width = container.clientWidth;
+        });
+
+        window.addEventListener('resize', () => {
+             const container = document.getElementById('chart-container');
+             canvas.width = container.clientWidth;
+             if (X_SCALE) analyzeAndDraw();
+        });
+
+    </script>
+</body>
+</html>
